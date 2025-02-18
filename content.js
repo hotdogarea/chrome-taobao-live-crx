@@ -5,7 +5,7 @@ if (window.hasOwnProperty('__TAOBAO_LIVE_HELPER_CONTENT_LOADED__')) {
     // 标记为已注入
     window.__TAOBAO_LIVE_HELPER_CONTENT_LOADED__ = true;
 
-    console.log('Content script loaded');
+    console.log('[Content] Content script loaded');
 
     // 创建全局状态对象
     const state = {
@@ -17,33 +17,18 @@ if (window.hasOwnProperty('__TAOBAO_LIVE_HELPER_CONTENT_LOADED__')) {
         maxProcessedMessages: 1000
     };
 
-    // 从URL中提取直播间ID
-    function extractLiveId() {
-        try {
-            // 尝试从URL中获取
-            const match = window.location.href.match(/\/(\d+)(?:\?|$)/);
-            if (match) {
-                state.liveId = match[1];
-                return state.liveId;
-            }
+    // 生成消息ID
+    function generateMessageId(comment) {
+        return `${comment.content}_${comment.time}_${comment.nick}_${comment.userId}`;
+    }
 
-            // 尝试从页面元素中获取
-            const metaElement = document.querySelector('meta[name="room-id"]');
-            if (metaElement) {
-                state.liveId = metaElement.getAttribute('content');
-                return state.liveId;
-            }
-
-            // 尝试从全局变量中获取
-            if (window.__GLOBAL_DATA__ && window.__GLOBAL_DATA__.roomId) {
-                state.liveId = window.__GLOBAL_DATA__.roomId;
-                return state.liveId;
-            }
-
-            return null;
-        } catch (e) {
-            console.error('提取直播间ID失败:', e);
-            return null;
+    // 清理过期的消息ID
+    function cleanupProcessedMessages() {
+        if (state.processedMessageIds.size > state.maxProcessedMessages) {
+            const messagesArray = Array.from(state.processedMessageIds);
+            const keepMessages = messagesArray.slice(Math.floor(messagesArray.length / 2));
+            state.processedMessageIds.clear();
+            keepMessages.forEach(id => state.processedMessageIds.add(id));
         }
     }
 
@@ -56,149 +41,140 @@ if (window.hasOwnProperty('__TAOBAO_LIVE_HELPER_CONTENT_LOADED__')) {
         return `${hours}:${minutes}:${seconds}`;
     }
 
-    // 生成消息ID
-    function generateMessageId(comment) {
-        return `${comment.content}_${comment.timestamp}_${comment.tbNick || comment.publisherNick}_${comment.userId || ''}`; 
-    }
-
-    // 清理过期的消息ID
-    function cleanupProcessedMessages() {
-        if (state.processedMessageIds.size > state.maxProcessedMessages) {
-            const messagesArray = Array.from(state.processedMessageIds);
-            const keepMessages = messagesArray.slice(Math.floor(messagesArray.length / 2));
-            state.processedMessageIds = new Set(keepMessages);
-        }
-    }
-
     // 处理评论数据
-    function processComments(data) {
+    function processComments(comments) {
         if (!state.isCapturing) {
-            console.log('当前未开启捕获，跳过处理弹幕');
+            console.log('[Content] 未开始捕获，跳过处理');
             return;
         }
 
         if (state.isProcessing) {
-            console.log('正在处理消息中，跳过重复处理');
+            console.log('[Content] 正在处理中，跳过');
             return;
         }
 
-        state.isProcessing = true;
+        if (!Array.isArray(comments)) {
+            console.error('[Content] 无效的评论数据格式');
+            return;
+        }
 
         try {
-            // 确保有直播间ID
-            if (!state.liveId) {
-                state.liveId = extractLiveId();
-            }
+            state.isProcessing = true;
+            console.log('[Content] 开始处理评论数据，数量:', comments.length);
 
-            // 处理评论
-            if (data?.data?.comments?.length > 0) {
-                const newComments = [];
-                const currentBatch = new Set(); // 用于检测同一批次内的重复
+            // 处理每条评论
+            comments.forEach(comment => {
+                if (!comment || !comment.content) return;
 
-                data.data.comments.forEach(comment => {
-                    if (!comment.content || !comment.content.trim()) {
-                        return;
-                    }
-
-                    const messageId = generateMessageId(comment);
-                    
-                    // 检查是否在当前批次或历史记录中已存在
-                    if (!currentBatch.has(messageId) && !state.processedMessageIds.has(messageId)) {
-                        currentBatch.add(messageId);
-                        state.processedMessageIds.add(messageId);
-                        
-                        const commentData = {
-                            sender: comment.tbNick || comment.publisherNick || 'unknown',
-                            time: formatTimestamp(comment.timestamp),
-                            content: comment.content.trim(),
-                            liveId: state.liveId || '',
-                            userToken: comment.renders?.userToken || '0',
-                            userId: comment.userId || ''
-                        };
-                        
-                        newComments.push(commentData);
-                    } else {
-                        console.log('跳过重复消息:', comment.content);
-                    }
-                });
-
-                // 只有有新消息时才发送
-                if (newComments.length > 0) {
-                    console.log('发送新评论数据，数量:', newComments.length);
-                    newComments.forEach(commentData => {
-                        chrome.runtime.sendMessage({
-                            type: 'newComment',
-                            data: commentData
-                        });
-                    });
+                const messageId = generateMessageId(comment);
+                if (state.processedMessageIds.has(messageId)) {
+                    console.log('[Content] 跳过重复消息:', comment.content);
+                    return;
                 }
 
-                // 清理过期消息ID
+                // 添加到已处理集合
+                state.processedMessageIds.add(messageId);
                 cleanupProcessedMessages();
-            }
-        } catch (e) {
-            console.error('处理评论数据失败:', e);
-            console.error('原始数据:', data);
+
+                // 构造消息对象
+                const message = {
+                    content: comment.content,
+                    sender: comment.nick,
+                    userToken: comment.userId,
+                    time: formatTimestamp(comment.time),
+                    liveId: comment.liveId
+                };
+
+                console.log('[Content] 发送新消息:', message);
+
+                // 发送到background
+                chrome.runtime.sendMessage({
+                    type: 'newComment',
+                    data: message
+                }, response => {
+                    if (chrome.runtime.lastError) {
+                        console.error('[Content] 发送消息失败:', chrome.runtime.lastError);
+                        return;
+                    }
+                    if (!response || !response.success) {
+                        console.error('[Content] 消息处理失败:', response && response.error);
+                    }
+                });
+            });
+        } catch (error) {
+            console.error('[Content] 处理评论数据时出错:', error);
         } finally {
             state.isProcessing = false;
         }
     }
 
+    // 注入脚本
+    function injectScript() {
+        // 等待页面加载完成
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                console.log('[Content] 页面加载完成，延迟注入脚本');
+                setTimeout(performInjection, 1000);
+            });
+        } else {
+            console.log('[Content] 页面已加载，直接注入脚本');
+            setTimeout(performInjection, 1000);
+        }
+    }
+
+    // 执行脚本注入
+    function performInjection() {
+        if (document.getElementById('taobao-live-helper-script')) {
+            console.log('[Content] 注入脚本已存在，跳过');
+            return;
+        }
+
+        console.log('[Content] 开始注入脚本');
+        const script = document.createElement('script');
+        script.id = 'taobao-live-helper-script';
+        script.src = chrome.runtime.getURL('inject.js');
+        script.onload = () => {
+            console.log('[Content] 注入脚本加载完成');
+            script.remove();
+        };
+        script.onerror = (error) => {
+            console.error('[Content] 注入脚本加载失败:', error);
+            script.remove();
+        };
+        (document.head || document.documentElement).appendChild(script);
+    }
+
     // 监听来自background的消息
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        console.log('Content script收到消息:', message);
+        console.log('[Content] 收到消息:', message);
         
         if (message.type === 'startCapture') {
+            console.log('[Content] 开始捕获');
             state.isCapturing = true;
-            state.liveId = extractLiveId();
             state.processedMessageIds.clear();
-            state.isProcessing = false;
-            console.log('开始捕获弹幕，直播间ID:', state.liveId);
-            sendResponse({ status: 'success' });
-        } else if (message.type === 'stopCapture') {
+            sendResponse({ success: true });
+        }
+        else if (message.type === 'stopCapture') {
+            console.log('[Content] 停止捕获');
             state.isCapturing = false;
-            state.isProcessing = false;
-            console.log('停止捕获弹幕');
-            sendResponse({ status: 'success' });
+            sendResponse({ success: true });
         }
         
         return true;
     });
 
-    // 注入脚本
-    function injectScript() {
-        const script = document.createElement('script');
-        script.src = chrome.runtime.getURL('inject.js');
-        script.onload = function() {
-            console.log('注入脚本加载完成');
-            this.remove();
-        };
-        (document.head || document.documentElement).appendChild(script);
-    }
-
-    // 当页面加载时注入脚本
-    injectScript();
-
     // 监听来自页面的消息
-    window.addEventListener('message', function(event) {
-        // 确保消息来自同源
+    window.addEventListener('message', event => {
         if (event.source !== window) return;
-
-        if (event.data.type === 'CAPTURED_URL') {
-            state.currentUrl = event.data.url;
-            console.log('捕获到URL:', state.currentUrl);
-        } else if (event.data.type === 'JSONP_RESPONSE') {
-            if (state.isCapturing && !state.isProcessing) {
-                processComments(event.data.data);
-            } else {
-                console.log('未开启捕获或正在处理中，跳过JSONP响应处理');
-            }
+        
+        if (event.data.type === 'newComments' && event.data.data) {
+            console.log('[Content] 收到页面消息:', event.data);
+            processComments(event.data.data);
         }
     });
 
-    // 页面加载完成后尝试提取直播间ID
-    window.addEventListener('load', function() {
-        state.liveId = extractLiveId();
-        console.log('页面加载完成，直播间ID:', state.liveId);
-    });
+    // 注入脚本
+    injectScript();
+    
+    console.log('[Content] Content script初始化完成');
 }

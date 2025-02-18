@@ -444,7 +444,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.type === 'newComment') {
-        console.log('收到新评论');
+        // console.log('收到新评论，完整数据:', JSON.stringify(message.data, null, 2));
         
         // 如果连接被禁用，提示用户手动启动服务
         if (connectionDisabled) {
@@ -457,6 +457,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         // 检查是否是重复消息
         if (isDuplicateMessage(message.data)) {
+            console.log('跳过重复消息');
             sendResponse({ success: true });
             return true;
         }
@@ -465,6 +466,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendToPopup(message.data);
         
         // 发送到服务器
+        console.log('准备发送到服务器的数据:', JSON.stringify({
+            type: 'danmu',
+            data: {
+                content: message.data.content,
+                nickname: message.data.sender,
+                time: message.data.time,
+                liveId: message.data.liveId,
+                userToken: message.data.userToken
+            }
+        }, null, 2));
+        
         const success = sendToServer(message.data);
         sendResponse({ success: success });
         return true;
