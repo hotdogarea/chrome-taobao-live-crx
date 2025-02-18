@@ -1,0 +1,16 @@
+# 忽略除了tblive以外的所有文件和文件夹
+/*
+!tblive/
+!.gitignore
+
+# 忽略系统文件
+.DS_Store
+Thumbs.db
+
+# 忽略IDE文件
+.idea/
+.vscode/
+*.sublime-*
+
+# 忽略日志文件
+*.log

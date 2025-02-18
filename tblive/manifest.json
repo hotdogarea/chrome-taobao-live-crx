@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "淘宝直播弹幕助手",
+  "version": "1.0",
+  "description": "捕获淘宝直播弹幕的Chrome扩展",
+  "icons": {
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  },
+  "permissions": [
+    "tabs",
+    "webRequest",
+    "storage",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://*.taobao.com/*",
+    "*://*.alicdn.com/*",
+    "*://*.h5api.m.taobao.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_icon": {
+      "16": "images/icon16.png",
+      "48": "images/icon48.png",
+      "128": "images/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.taobao.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [{
+    "resources": ["inject.js"],
+    "matches": ["*://*.taobao.com/*"]
+  }]
+}
