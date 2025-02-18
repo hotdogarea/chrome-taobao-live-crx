@@ -34,6 +34,11 @@ function sendMessage(message) {
 document.addEventListener('DOMContentLoaded', function() {
     console.log('popup页面加载完成');
     
+    // 初始化状态
+    let isCapturing = false;
+    const processedMessageIds = new Set();
+    const maxMessages = 100; // 最大显示消息数量
+    
     // 获取DOM元素
     const toggleButton = document.getElementById('toggleCapture');
     const clearButton = document.getElementById('clearData');
@@ -42,8 +47,69 @@ document.addEventListener('DOMContentLoaded', function() {
     const apiUrlDiv = document.getElementById('apiUrl');
     const apiResponseDiv = document.getElementById('apiResponse');
     
-    // 捕获状态
-    let isCapturing = false;
+    // 生成消息ID
+    function generateMessageId(message) {
+        return `${message.content}_${message.time}_${message.sender}`;
+    }
+
+    // 清理旧消息
+    function cleanupOldMessages() {
+        while (commentsList.children.length > maxMessages) {
+            commentsList.removeChild(commentsList.lastChild);
+        }
+        
+        // 清理已处理消息ID集合
+        if (processedMessageIds.size > maxMessages * 2) {
+            const messageIds = Array.from(processedMessageIds);
+            processedMessageIds.clear();
+            messageIds.slice(-maxMessages).forEach(id => processedMessageIds.add(id));
+        }
+    }
+
+    // 添加消息到列表
+    function addMessageToList(message) {
+        const messageId = generateMessageId(message);
+        
+        // 检查消息是否已经显示
+        if (processedMessageIds.has(messageId)) {
+            console.log('跳过重复消息:', message);
+            return;
+        }
+        
+        // 记录消息ID
+        processedMessageIds.add(messageId);
+
+        const div = document.createElement('div');
+        div.className = 'comment';
+        
+        const nickname = message.sender;
+        const token = message.userToken;
+        
+        div.innerHTML = `
+            <div class="comment-header">
+                <span class="time">[${message.time}]</span>
+                <span class="sender">${nickname}</span>
+                ${token ? `<span class="user-token">[${token}]</span>` : ''}
+            </div>
+            <span class="content">${message.content}</span>
+        `;
+        
+        // 在列表顶部插入新消息
+        if (commentsList.firstChild) {
+            commentsList.insertBefore(div, commentsList.firstChild);
+        } else {
+            commentsList.appendChild(div);
+        }
+        
+        // 清理旧消息
+        cleanupOldMessages();
+    }
+
+    // 清空消息列表
+    function clearMessageList() {
+        commentsList.innerHTML = '';
+        processedMessageIds.clear();
+    }
 
     // 更新按钮状态
     function updateButtonState() {
@@ -53,112 +119,86 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // 清除所有数据
-    function clearAllData() {
-        if (commentsList) commentsList.innerHTML = '';
-        if (liveIdSpan) liveIdSpan.textContent = '等待获取...';
-        if (apiUrlDiv) apiUrlDiv.textContent = '';
-        if (apiResponseDiv) apiResponseDiv.textContent = '';
-        chrome.storage.local.clear();
-    }
-
-    // 添加评论
-    function addComment(comment) {
-        if (!commentsList) return;
-
-        const div = document.createElement('div');
-        div.className = 'comment';
-        
-        const nickname = comment.sender;
-        const token = comment.userToken;
-        
-        div.innerHTML = `
-            <div class="comment-header">
-                <span class="time">[${comment.time}]</span>
-                <span class="sender">${nickname}</span>
-                ${token ? `<span class="user-token">[${token}]</span>` : ''}
-            </div>
-            <span class="content">${comment.content}</span>
-        `;
-        
-        // 在最前面插入新评论
-        if (commentsList.firstChild) {
-            commentsList.insertBefore(div, commentsList.firstChild);
-        } else {
-            commentsList.appendChild(div);
-        }
-        
-        // 限制显示的评论数量
-        const maxComments = 1000;
-        while (commentsList.children.length > maxComments) {
-            commentsList.removeChild(commentsList.lastChild);
-        }
-    }
-
     // 绑定按钮事件
     if (toggleButton) {
-        toggleButton.addEventListener('click', function() {
-            if (!isCapturing) {
-                chrome.runtime.sendMessage({action: 'startCapture'}, function(response) {
-                    if (response && response.success) {
-                        console.log('开始捕获消息发送成功');
+        toggleButton.addEventListener('click', async function() {
+            try {
+                if (!isCapturing) {
+                    // 开始捕获
+                    console.log('正在开始捕获...');
+                    const response = await sendMessage({ type: 'startCapture' });
+                    if (response.status === 'success') {
                         isCapturing = true;
                         updateButtonState();
+                        console.log('开始捕获成功');
+                        clearMessageList(); // 清空之前的消息
+                    } else {
+                        console.error('开始捕获失败:', response.error);
                     }
-                });
-            } else {
-                chrome.runtime.sendMessage({action: 'stopCapture'}, function(response) {
-                    if (response && response.success) {
-                        console.log('停止捕获消息发送成功');
+                } else {
+                    // 停止捕获
+                    console.log('正在停止捕获...');
+                    const response = await sendMessage({ type: 'stopCapture' });
+                    if (response.status === 'success') {
                         isCapturing = false;
                         updateButtonState();
-
-                        // 保存评论数据到localStorage
-                        try {
-                            const commentsHtml = commentsList.innerHTML;
-                            chrome.storage.local.set({ 'savedComments': commentsHtml });
-                        } catch (error) {
-                            console.error('保存评论失败:', error);
-                        }
+                        console.log('停止捕获成功');
+                    } else {
+                        console.error('停止捕获失败:', response.error);
                     }
-                });
+                }
+            } catch (error) {
+                console.error('切换捕获状态时出错:', error);
             }
         });
     }
 
     // 绑定清除按钮事件
     if (clearButton) {
-        clearButton.addEventListener('click', () => {
-            if (confirm('确定要清除所有数据吗？')) {
-                clearAllData();
-            }
+        clearButton.addEventListener('click', function() {
+            clearMessageList();
+            if (liveIdSpan) liveIdSpan.textContent = '等待获取...';
+            if (apiUrlDiv) apiUrlDiv.textContent = '';
+            if (apiResponseDiv) apiResponseDiv.textContent = '';
+            chrome.storage.local.clear();
         });
     }
 
     // 监听来自background的消息
-    chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
-        console.log('popup收到消息:', message);
-        if (message.type === 'newComment' && message.data) {
-            addComment(message.data);
-        } else if (message.type === 'liveInfo' && message.data) {
-            if (liveIdSpan) liveIdSpan.textContent = message.data.liveId || '未知';
-        } else if (message.type === 'apiUrl' && message.url) {
-            if (apiUrlDiv) apiUrlDiv.textContent = message.url;
-        } else if (message.type === 'apiResponse' && message.data) {
-            if (apiResponseDiv) apiResponseDiv.textContent = message.data.response || '';
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.type === 'apiResponse') {
+            if (apiUrlDiv) apiUrlDiv.textContent = message.data.url;
+            if (apiResponseDiv) apiResponseDiv.textContent = formatJSON(message.data.response);
+            
+            // 提取直播ID
+            try {
+                const url = new URL(message.data.url);
+                const liveId = url.searchParams.get('liveId');
+                if (liveId && liveIdSpan) {
+                    liveIdSpan.textContent = liveId;
+                }
+            } catch (e) {
+                console.error('解析URL失败:', e);
+            }
+        } else if (message.type === 'newComment') {
+            if (!isCapturing) {
+                console.log('未开启捕获，忽略消息');
+                return;
+            }
+            addMessageToList(message.data);
+            commentCount++;
+            const countElement = document.getElementById('commentCount');
+            if (countElement) {
+                countElement.textContent = `已捕获 ${commentCount} 条弹幕`;
+            }
         }
     });
 
-    // 恢复保存的评论
-    chrome.storage.local.get(['savedComments'], function(result) {
-        if (result.savedComments && commentsList) {
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = result.savedComments;
-            // 反转评论顺序
-            const comments = Array.from(tempDiv.children);
-            comments.reverse().forEach(comment => {
-                commentsList.appendChild(comment);
-            });
+    // 恢复捕获状态
+    chrome.storage.local.get(['isCapturing'], function(result) {
+        if (result.isCapturing) {
+            isCapturing = true;
+            updateButtonState();
         }
     });
 });

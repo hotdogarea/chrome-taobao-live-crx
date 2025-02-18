@@ -2,43 +2,51 @@
   "manifest_version": 3,
   "name": "淘宝直播弹幕助手",
   "version": "1.0",
-  "description": "捕获淘宝直播弹幕的Chrome扩展",
+  "description": "获取淘宝直播弹幕",
   "icons": {
-    "16": "images/icon16.png",
-    "48": "images/icon48.png",
-    "128": "images/icon128.png"
+    "48": "/images/icon48.png",
+    "128": "/images/icon128.png"
   },
   "permissions": [
-    "tabs",
     "webRequest",
     "storage",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "tabs"
   ],
   "host_permissions": [
     "*://*.taobao.com/*",
+    "*://*.tmall.com/*",
     "*://*.alicdn.com/*",
-    "*://*.h5api.m.taobao.com/*"
+    "*://*.h5api.m.taobao.com/*",
+    "ws://localhost:8765/*",
+    "ws://127.0.0.1:8765/*"
   ],
   "background": {
-    "service_worker": "background.js"
-  },
-  "action": {
-    "default_icon": {
-      "16": "images/icon16.png",
-      "48": "images/icon48.png",
-      "128": "images/icon128.png"
-    }
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
-      "matches": ["*://*.taobao.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "*://*.taobao.com/*",
+        "*://*.tmall.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [{
     "resources": ["inject.js"],
-    "matches": ["*://*.taobao.com/*"]
-  }]
+    "matches": ["*://*.taobao.com/*", "*://*.tmall.com/*"]
+  }],
+  "action": {
+    "default_icon": {
+      "48": "/images/icon48.png",
+      "128": "/images/icon128.png"
+    },
+    "default_title": "淘宝直播弹幕助手"
+  }
 }

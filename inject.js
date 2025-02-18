@@ -7,94 +7,167 @@ if (window.hasOwnProperty('__TAOBAO_LIVE_HELPER_INJECT_LOADED__')) {
 
     console.log('注入脚本开始加载');
 
-    // 创建一个全局对象来存储状态
+    // 初始化全局对象
     window.__TAOBAO_LIVE_HELPER__ = {
-        lastUrl: null,
-        callbacks: {}
+        lastProcessedData: null,
+        processedMessages: new Set(),
+        maxProcessedMessages: 1000,
+        isProcessing: false
     };
 
-    // 在页面中注入JSONP处理函数
-    const script = document.createElement('script');
-    script.textContent = `
-        // 定义全局处理函数
-        window.__processJSONPResponse = function(data) {
-            console.log('处理JSONP响应');
-            window.postMessage({
-                type: 'JSONP_RESPONSE',
-                data: data
-            }, '*');
-        };
+    // 清理过期的消息ID
+    function cleanupProcessedMessages() {
+        const processedMessages = window.__TAOBAO_LIVE_HELPER__.processedMessages;
+        if (processedMessages.size > window.__TAOBAO_LIVE_HELPER__.maxProcessedMessages) {
+            const messagesArray = Array.from(processedMessages);
+            const keepMessages = messagesArray.slice(Math.floor(messagesArray.length / 2));
+            window.__TAOBAO_LIVE_HELPER__.processedMessages = new Set(keepMessages);
+        }
+    }
 
-        // 定义代理创建函数
-        window.__createCallbackProxy = function(callbackName) {
-            const originalCallback = window[callbackName];
-            window[callbackName] = function(data) {
-                console.log('JSONP回调被调用:', callbackName);
-                if (originalCallback) {
-                    originalCallback(data);
+    // 生成消息ID
+    function generateMessageId(comment) {
+        return `${comment.content}_${comment.timestamp}_${comment.tbNick || comment.publisherNick}_${comment.userId || ''}`; 
+    }
+
+    // 检查数据是否重复
+    function isDataDuplicate(data) {
+        if (!window.__TAOBAO_LIVE_HELPER__.lastProcessedData) {
+            window.__TAOBAO_LIVE_HELPER__.lastProcessedData = data;
+            return false;
+        }
+
+        const lastData = window.__TAOBAO_LIVE_HELPER__.lastProcessedData;
+        const isDuplicate = JSON.stringify(data) === JSON.stringify(lastData);
+        
+        if (!isDuplicate) {
+            window.__TAOBAO_LIVE_HELPER__.lastProcessedData = data;
+        }
+        
+        return isDuplicate;
+    }
+
+    // 处理JSONP响应
+    window.__processJSONPResponse = function(data) {
+        // 检查是否正在处理中
+        if (window.__TAOBAO_LIVE_HELPER__.isProcessing) {
+            console.log('[Inject] 正在处理消息中，跳过');
+            return;
+        }
+
+        // 检查数据有效性
+        if (!data || !data.data || !data.data.comments) {
+            console.log('[Inject] 无效的数据格式');
+            return;
+        }
+
+        // 检查是否是重复的数据包
+        if (isDataDuplicate(data)) {
+            console.log('[Inject] 跳过重复的数据包');
+            return;
+        }
+
+        try {
+            window.__TAOBAO_LIVE_HELPER__.isProcessing = true;
+
+            const comments = data.data.comments;
+            const newComments = [];
+            const currentBatch = new Set(); // 用于检测同一批次内的重复
+
+            comments.forEach(comment => {
+                if (!comment.content || !comment.content.trim()) {
+                    return;
                 }
-                window.__processJSONPResponse(data);
-            };
-        };
-    `;
-    document.documentElement.appendChild(script);
-    script.remove();
 
-    // 监听script标签的创建
-    const observer = new MutationObserver((mutations) => {
-        mutations.forEach((mutation) => {
-            mutation.addedNodes.forEach((node) => {
-                if (node.tagName === 'SCRIPT') {
-                    const src = node.src;
-                    if (src && src.includes('mtop.taobao.iliad.comment.query.latest')) {
-                        console.log('发现新的JSONP请求:', src);
-                        // 提取callback参数
-                        const match = src.match(/callback=(mtopjsonp\d+)/);
-                        if (match) {
-                            const callbackName = match[1];
-                            console.log('找到callback:', callbackName);
-                            // 创建代理
-                            const injectScript = document.createElement('script');
-                            injectScript.textContent = `window.__createCallbackProxy('${callbackName}');`;
-                            document.head.appendChild(injectScript);
-                            injectScript.remove();
+                const messageId = generateMessageId(comment);
+                
+                // 检查是否在当前批次或历史记录中已存在
+                if (!currentBatch.has(messageId) && !window.__TAOBAO_LIVE_HELPER__.processedMessages.has(messageId)) {
+                    currentBatch.add(messageId);
+                    window.__TAOBAO_LIVE_HELPER__.processedMessages.add(messageId);
+                    newComments.push(comment);
+                } else {
+                    console.log('[Inject] 跳过重复消息:', comment.content);
+                }
+            });
+
+            // 只有有新消息时才发送
+            if (newComments.length > 0) {
+                console.log('[Inject] 发送新消息，数量:', newComments.length);
+                const newData = {
+                    ...data,
+                    data: {
+                        ...data.data,
+                        comments: newComments
+                    }
+                };
+                
+                window.postMessage({
+                    type: 'JSONP_RESPONSE',
+                    data: newData
+                }, '*');
+            }
+
+            // 清理过期消息ID
+            cleanupProcessedMessages();
+        } catch (e) {
+            console.error('[Inject] 处理JSONP响应时出错:', e);
+        } finally {
+            window.__TAOBAO_LIVE_HELPER__.isProcessing = false;
+        }
+    };
+
+    // 监听URL变化
+    let lastUrl = null;
+    function checkUrlChange() {
+        const currentUrl = window.location.href;
+        if (currentUrl !== lastUrl) {
+            lastUrl = currentUrl;
+            window.postMessage({
+                type: 'CAPTURED_URL',
+                url: currentUrl
+            }, '*');
+        }
+    }
+
+    // 创建MutationObserver来监听script标签的添加
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            mutation.addedNodes.forEach(function(node) {
+                if (node.nodeName === 'SCRIPT') {
+                    const src = node.src || '';
+                    if (src.includes('mtop.taobao.iliad.comment.query.latest')) {
+                        // 检查是否包含callback参数
+                        const url = new URL(src);
+                        const callback = url.searchParams.get('callback');
+                        if (callback) {
+                            // 替换原始callback
+                            const newSrc = src.replace(callback, '__processJSONPResponse');
+                            
+                            // 创建新的script标签
+                            const newScript = document.createElement('script');
+                            newScript.src = newSrc;
+                            
+                            // 替换原始script标签
+                            node.parentNode.replaceChild(newScript, node);
                         }
-                        // 发送URL到content script
-                        window.postMessage({
-                            type: 'CAPTURED_URL',
-                            url: src
-                        }, '*');
                     }
                 }
             });
         });
     });
 
-    // 观察document的变化
-    observer.observe(document, {
+    // 开始监听DOM变化
+    observer.observe(document.documentElement, {
         childList: true,
         subtree: true
     });
 
-    // 监听URL变化
-    const originalCreateElement = document.createElement;
-    document.createElement = function(tagName) {
-        const element = originalCreateElement.call(document, tagName);
-        if (tagName.toLowerCase() === 'script') {
-            const originalSetAttribute = element.setAttribute;
-            element.setAttribute = function(name, value) {
-                if (name === 'src' && value.includes('mtop.taobao.iliad.comment.query.latest')) {
-                    console.log('捕获到JSONP URL:', value);
-                    window.postMessage({
-                        type: 'CAPTURED_URL',
-                        url: value
-                    }, '*');
-                }
-                return originalSetAttribute.call(this, name, value);
-            };
-        }
-        return element;
-    };
+    // 定期检查URL变化
+    setInterval(checkUrlChange, 1000);
+
+    // 初始检查URL
+    checkUrlChange();
 
     console.log('注入脚本加载完成');
 }
