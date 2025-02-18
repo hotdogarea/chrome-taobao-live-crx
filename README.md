@@ -19,7 +19,6 @@
 
 2. 安装Python依赖：
    ```bash
-   cd tblive
    pip install -r requirements.txt
    ```
 
