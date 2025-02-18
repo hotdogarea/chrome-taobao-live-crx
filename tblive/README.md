@@ -1,6 +1,7 @@
 # Chrome Taobao Live Comments Extension
 
 Chrome扩展，用于捕获和显示淘宝直播评论。
+交流V:miaomiao210405
 
 ## 功能特点
 
